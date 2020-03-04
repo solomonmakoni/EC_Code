@@ -1,0 +1,384 @@
+with ec_order AS (
+    select
+           id as order_id,
+           name as order_source_orderid, -- source system order id ebms_order_number
+           ebms_order_number__c as order_source_orderid_1, -- source system order id redudent of name
+           ebms_cruise_id__c as order_cruise_id,
+           ebms_created_date__c as order_source_create_date, -- Date order was created at the source
+           createddate as order_sf_create_date, -- Date order was created - Values of create date at source and in salesforce don't always match
+           opportunity__c as order_opportuniy, -- fk for joining to the opportunity, an order may not have any opportunity association
+            account__c as order_accountfk, -- foreign key to tie order to account. QQ - can an order be tied to multiple account???
+            contact__c as order_contactfk, -- foreign key to tie order to account. QQ - can an order be tied to multiple contacts???
+            city__c as order_event_city, -- City Event occured
+            brand__c as order_ec_brand, -- EC have brand business units like Odyssey, Spirit, Bateaux,ect.
+            cruise_date__c as order_cruise_date, -- Date of Cruise event
+            cruise_date_fiscal_year__c as order_event_year, -- Year event occured comes from object
+            cruise_date_fiscal_quarter__c as order_event_quarter, --Quarter Event occured comes from event object
+            cruise_title__c as order_cruise_title, -- Title of the cruise event
+            ownerid as order_ownerid,
+            account_email__c as order_acct_email, -- Email Account associated with the Account tied to the order
+            status__c as order_status, -- order status (used for revenue) - true status -'Canceled','Active','Tentative','Closed'
+            phone__c as order_phone, -- Phone number associated with the order
+            order_owner__c as order_owner,
+            cruise_type__c as order_cruise_type,
+
+            taxes__c as order_taxes, --tax amount of the order
+            taxable__c as istaxable, -- Whether or not order is taxable
+           pax__c as order_passengers,
+            tickets_amount__c as ticket_amount,
+           tickets_discount_amount__c as ticket_discount,
+           bar_discount_amount__c as bar_discount,
+           bar_amount__c as bar_amount,
+           order_gross__c as order_gross_amount, -- Order amount including taxes
+            order_net__c as order_net_amount,
+           reportable_total__c as order_reportable_total
+
+
+    from customer_staging.sf_ec_order__c
+
+), ec_accounts as(
+        Select
+                id                          as acct_id,
+                market_segment__c           as acct_mkt_segment,-- Along with market_subsegment__c, market_segment__c Helps identify whether the account is individual, groups, corporate,trac=vel agency, etc.
+
+                CASE WHEN upper(acct_mkt_segment) like 'TOUR%' THEN 'THIRD_PARTY'
+                   WHEN upper(acct_mkt_segment) like 'CORP%' THEN 'CORPORATION'
+
+                    WHEN upper(acct_mkt_segment) SIMILAR TO '%(IND)%'
+                        THEN 'INDIVIDUAL'
+                    WHEN upper(acct_mkt_segment) SIMILAR TO '%(EDU|SOCIAL)%'
+                        THEN 'CIVIC_GROUP'
+                    END AS   acct_cust_type,
+                market_subsegment__c        as acct_subsegment,-- Along with market_segment__c, market_subsegment__c Helps identify whether the account is individual, groups, corporate,trac=vel agency, etc.
+                name                        as acct_name,
+                persondonotcall             as acct_phone_DNC,
+                personcontactid             as acct_cnct_pk,
+                type                        as acct_type,
+                recordtypeid,--QQ where does this link to/ only three distinct values???
+                upper(trim(billingcity))                 as acct_billingcity,
+                upper(trim(billingstreet))               as acct_billing_street,
+                upper(trim(billingpostalcode))           as acct_billing_cd,
+                upper(trim(billingstate))                as acct_billing_state,
+                upper(trim(billingcountrycode))          as acct_billing_country_cd,
+                upper(trim(billingcountry))              as acct_billing_country,
+                personmailingcountry        as acct_person_mailing_country,
+                phone                       as acct_phone,
+                ownerid                     as acct_ownerid,
+                account_region__c           as acct_region,
+                account_status__c           as acct_status,
+                upper(trim(lastname))                    as acct_lname,
+                upper(trim(firstname))                   as acct_fname,
+                upper(trim(contact_region__pc))          as acct_cnct_region,
+                upper(trim(personemail))                 as acct_email,
+                personhasoptedoutofemail    as acct_email_opt_out,
+                ebms_contact_number__pc     as acct_source_cnctid,
+                site                        as acct_site,
+                ispersonaccount             as acct_isperson,
+                ownership                   as acct_company_ownership,
+                accountsource               as acct_source
+        from customer_staging.sf_ec_account
+
+), ec_contact
+         AS (
+        select id                     as cnct_id,
+               accountid              as cnct_acct_fk,
+               donotcall              as cnct_DNC,
+               ispersonaccount        as cnct_isperson,
+               upper(trim(lastname))               as cnct_lname,
+               upper(trim(firstname))              as cnct_fname,
+               department             as cnct_department,
+               upper(trim(name))                   as cnct_name,
+               upper(trim(mailingstreet))          as cnct_mail_street,
+               upper(trim(mailingcity))            as cnct_mail_city,
+               upper(trim(mailingstate))           as cnct_mail_state,
+               upper(trim(mailingpostalcode))      as cnct_mail_postcode,
+               upper(trim(mailingstatecode))       as cnct_mail_statecode,
+               upper(trim(mailingcountry))         as cnct_mail_country,
+               upper(trim(email))                  as cnct_email,
+               hasoptedoutofemail     as cnct_email_DNC,
+               ownerid                as cnct_ownerid,
+               contact_region__c      as cnct_region,
+               market_subsegment__c   as cnct_mkt_subsegment,
+               phone                  as cnct_phone,
+               mobilephone            as cnct_mobile,
+               donotcall              as cnct_phone_DNC,
+               contact_strategy__c    as cnct_strategy,
+               ebms_contact_number__c as cnct_sourceid,
+               title                  as cnct_title -- Organizational Title e.g. President, CEO, etc.
+        from customer_staging.sf_ec_contact
+    ), ec_event AS(
+        Select id as event_id,
+                    whoid,
+                    whatid,
+                    whocount,
+                    whatcount,
+                    accountid,
+                    accountoppid__c,
+                    subject as event_subject,
+                    activitydatetime as event_time,
+                    activitydate as event_date,
+                    ownerid event_ownerid,
+                    isprivate as event_private,
+                    groupeventtype,
+                    eventsubtype,
+                    db_activity_type__c,
+                    location as event_location,
+                    description as event_description
+        From customer_staging.sf_ec_event
+         --limit 100
+),
+
+    ec_order_profile AS(
+-- Customer Profile
+-- ec_customer profile
+select
+       o.id as order_id,
+       a.id as acct_id,
+       c.id as cnct_id,
+        l.id as lead_id,
+       p.id as opportunity_id,
+        l.convertedopportunityid as lead_opportunity,
+       o.name as order_source_orderid,
+        c.id                     as cnct_id,
+        c.accountid              as cnct_acct_fk,
+        p.accountid as opportunity_acctid,-- account opportunity fk reference
+        convertedaccountid as lead_acct_fk,
+        convertedcontactid as lead_cnct_fk,
+
+        p.primary_contact__c,
+       o.ebms_created_date__c as order_source_create_date,
+       o.createddate as booking_date,
+       extract(year from o.createddate) as booking_year,
+    extract(month from o.createddate) as booking_month,
+       cruise_date__c as cruise_date,
+      cruise_date_fiscal_year__c as event_year,
+                          p.event_fiscal_year__c as opportunity_event_year,
+
+
+      cruise_title__c as order_cruise_title,
+      cruise_type__c as order_cruise_type,
+       city__c as order_event_city,
+                       l.city as lead_city,
+                l.state as lead_state,
+                l.country as lead_country,
+
+           o.tickets_amount__c as ticket_amount,
+           o.tickets_discount_amount__c as ticket_discount,
+           o.bar_discount_amount__c as bar_discount,
+           o.bar_amount__c as bar_amount,
+           o.order_gross__c as order_gross_amount,
+            o.order_net__c as order_net_amount,
+           o.reportable_total__c as order_reportable_total,
+           p.opportunity_value__c,
+       o.brand__c as HC_brand,
+           o.pax__c as order_passenger_count,
+
+             coalesce(o.phone__c, a.phone,c.phone, c.mobilephone, l.phone)         as customer_phone,
+-- Market Segments
+        coalesce(a.market_segment__c,l.market_segment__c) as market_segment,
+
+        coalesce(a.market_subsegment__c, c.market_subsegment__c,l.market_subsegment__c)      as market_subsegment,
+
+
+-- Names
+       coalesce(upper(trim(a.name)),upper(trim(c.name)), upper(trim(p.name)),upper(trim(l.name)))       as customer_name,
+      coalesce((upper(trim(a.lastname))  + ', '+ upper(trim(a.firstname))),
+       (upper(trim(c.lastname))  + ',' + upper(trim(c.firstname) )),
+        (upper(trim(l.lastname))  + ','+ upper(trim(l.firstname))) )as customer_fullname,
+        upper(trim(l.company)) as lead_company,
+       upper(trim(department))             as cnct_department,
+-- Contact Details
+    -- Emails
+        coalesce(upper(trim(o.account_email__c)),upper(trim(a.personemail)) , upper(trim(c.email)),upper(l.email))  as customer_email,
+        coalesce(a.personhasoptedoutofemail,c.hasoptedoutofemail)    as customer_email_DNC,
+
+        coalesce(persondonotcall, c.donotcall)           as customer_phone_DNC,
+
+        c.ispersonaccount        as cnct_isperson,
+
+               coalesce(
+                   (upper(trim(billingstreet)) + ';' +
+                         upper(trim(billingpostalcode)) + ';' +
+                         upper(trim(billingcity)) + ';' +
+                         upper(trim(billingstate)) + ';' +
+                         upper(trim(billingcountrycode)) + ';' +
+                         upper(trim(billingcountry)))
+           ,
+                        (upper(trim(mailingstreet)) + '; ' +
+                         upper(trim(mailingcity)) + '; ' +
+                         upper(trim(mailingstate)) + '; ' +
+                         upper(trim(mailingpostalcode)) + '; ' +
+                         upper(trim(mailingstatecode)) + '; ' +
+                         coalesce(upper(trim(mailingcountry)) + '; ' +upper(personmailingcountry)))
+           ) as customer_address,
+
+                status__c as order_status,
+                account_status__c           as acct_status,
+                l.status as lead_status,
+
+                coalesce(upper(trim(account_region__c)),upper(trim(contact_region__pc)) ,
+                    upper(trim(contact_region__c)),upper(trim(l.region__c)))       as customer_region,
+                       l.regionf__c as metro_region,
+        site as account_site,
+
+
+                coalesce(a.ownerid, c.ownerid,l.ownerid) as lead_ownerid,
+
+
+               p.type as opportunity_type,
+                   coalesce(p.event_type__c,l.event_type__c) as event_type,
+                l.ls_event_type__c as lead_event_type,
+                   p.purpose__c as opportunity_purpose,
+                   p.ownerid as opportunity_ownerid,
+                   p.opp_stage__c as opportunity_stage,
+                   coalesce(p.leadsource,l.leadsource)  as leadsource,
+
+                   p.orders_total__c as opportunity_order_total,
+                   p.actual_order_amount__c as opportunity_order_amount,
+                   p.amount as opportunity_amount,
+                isconverted as lead_converted,
+                l.converteddate as lead_conversion_date,
+
+                l.ebms_lead_number__c as nyc_ferry_id,
+
+
+
+                l.createddate as lead_created,
+                l.event_date__c as lead_event_date,
+
+
+
+                l.description as lead_description,
+                l.campaign__c as lead_campaign
+
+from customer_staging.sf_ec_order__c as o
+left outer join customer_staging.sf_ec_account as a
+on o.account__c = a.id
+left outer join customer_staging.sf_ec_contact as c
+on o.contact__c = c.id
+left outer join customer_staging.sf_ec_opportunity as p
+    on p.accountid = a.id
+right outer join customer_staging.sf_ec_lead l
+    on p.id = l.convertedopportunityid
+
+
+ ),ec_customer_details AS (
+                select
+                       'EC Legacy' as Business_Port,
+customer_email,
+
+customer_fullname,
+customer_name,
+customer_phone,
+lead_company,
+
+ customer_address,
+     HC_brand,
+                       order_cruise_type,
+           --order_event_mkt_cd,
+           market_segment,
+           market_subsegment,
+           --cnct_mkt_segment,
+           --event_status,
+           booking_year,
+        cruise_date,
+        event_year,
+           --order_source_create_date,
+           --order_sf_create_date,
+           account_site,
+            metro_region,
+            customer_region,
+           --order_status,
+           --sum(event_capacity)                                                 as total_events_capacity,
+           sum(order_passenger_count)                                          as total_passengers,
+
+           --order_event_year,
+           count(order_id)                                                     as frequency,
+           sum(order_reportable_total)                                         as cust_revenue_before_tax,
+           sum(order_gross_amount)                                      as cust_revenue_including_taxes,
+            sum(ticket_amount)                                          as cust_tickets_revenue,
+           --min(order_source_create_date) as initial_source_order_date,
+           min(booking_date)                                                   as first_booking_date,
+           --max(order_source_create_date) as recent_source_order_date,
+           max(booking_date)                                                   as recent_booking_date,
+        current_date - max(booking_date)                                      as recency,
+        avg(order_reportable_total) as average_cust_revenue
+
+    from ec_order_profile
+   where order_status IN ('Closed', 'Active')
+    group by 1, 2, 3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+    order by 14, 13,11 desc
+),Customer_Summary AS(
+
+
+select
+     Business_Port,
+market_segment,
+
+       booking_year,
+       event_year,
+       extract(month from cruise_date) as cruise_month,
+       extract(week from cruise_date) as cruise_week,
+       --order_event_status,
+       --order_event_year,
+       cast(cast(sum(CASE WHEN customer_email IS NOT NULL THEN 1 ELSE 0 END)as float)*100/
+       cast(sum(frequency) as float)as decimal(5,2)) as order_with_emails,
+        cast(cast(sum(CASE WHEN customer_phone IS NOT NULL THEN 1 ELSE 0 END)as float)*100/
+        cast(sum(frequency) as float)as decimal(5,2)) as order_with_phone,
+
+        cast(cast(sum(CASE WHEN  customer_address IS NOT NULL THEN 1 ELSE 0 END)as float)*100/
+        cast(sum(frequency) as float)as decimal(5,2)) as order_with_cust_address,
+        cast(cast(sum(CASE WHEN customer_email IS NOT NULL AND customer_phone IS NOT NULL AND customer_address IS NOT NULL THEN 1 ELSE 0 END)as float)*100/
+       cast(sum(frequency) as float)as decimal(5,2)) as order_with_all_contacts,
+
+       cast(cast(sum(CASE WHEN customer_email IS NOT NULL OR customer_phone IS NOT NULL OR customer_address IS NOT NULL THEN 1 ELSE 0 END)as float)*100/
+      cast(sum(frequency) as float)as decimal(5,2)) as order_with_any_contacts,
+
+       cast(cast(sum(CASE WHEN customer_fullname IS NOT NULL OR customer_name IS NOT NULL THEN 1 ELSE 0 END)as float)*100/
+      cast(sum(frequency) as float)as decimal(5,2)) as order_with_any_name,
+sum(total_passengers) as passengers,
+
+cast(sum(cust_tickets_revenue)as decimal(15,2)) as cust_tickets_revenue,
+       cast(sum(cust_revenue_before_tax) as decimal(15,2)) as cust_revenue_before_taxes,
+       cast(sum(cust_revenue_including_taxes)as decimal(15,2)) as revenue_with_taxes,
+sum(frequency) as total_orders,
+        (cast(cast(sum(CASE WHEN frequency > 1 and (customer_email is not null
+                                OR customer_phone is not null)
+               THEN 1 else 0
+           END) as float
+         )/(cast(sum (Case when  (customer_email is not null
+                                OR customer_phone is not null) THEN 1 end )as float))as decimal(5,2))*100 )
+         as repeat_rate-- Calculated repeat rate
+
+from ec_customer_details
+--where order_status IN ('Closed', 'Active')
+--and booking_year between 2018 and 2019
+group by 1,2,3,4,5,6
+),
+     revenue AS
+         (select event_year,booking_year,
+       market_segment,
+    market_subsegment,
+HC_brand,
+order_event_city,
+               sum(order_net_amount) as net_revenue,
+    sum(ticket_amount) as ticket_revenue,
+        sum(order_gross_amount) as revenue_with_tax,
+       sum(order_reportable_total) as revenue_before_tax
+
+             from ec_order_profile
+         where order_status in('Closed', 'Active')
+    group by 1,2,3,4,5,6
+             order by 1,2,3,4,5 desc)
+
+
+select * from Customer_Summary
+--where acct_mkt_segment = 'Corporate'
+
+
+
+--limit 100
+
+
+
+
